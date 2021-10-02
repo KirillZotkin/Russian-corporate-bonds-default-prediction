@@ -1,1 +1,2 @@
 # Russian-corporate-bonds-default-prediction
+Hi! In this repository you can find The work that is devoted to the possibility of predicting defaults of corporate bonds of the Russian market on the basis of financial statements of issuing companies. The '.Rmd' file contains the code used to calculate the models, in the 'Description.docx' file you can find a detailed description of the methods used and the results of the study.
