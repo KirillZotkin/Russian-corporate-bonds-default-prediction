@@ -1,0 +1,439 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+                                                              # Preparing the data
+```{r}
+library(e1071)
+library(dplyr)
+library(caret)
+library(vegan)
+library(DMwR)
+library(pROC)
+library(openxlsx)
+data <- readRDS("default.imp.med.rds")
+#data <- read.xslx('default_history.xlsx') # upload default data
+
+# there are 14 columns in my data: 13 parametrs and default column,in which 1 means default and 0 means no default 
+# lets create random test data, selecting 42 no default and 6 default observations
+
+default_random_test_number <- 6                                                        # set the number of observations for default test data
+
+default_data <- filter(data,default==1)                                                # filter default data 
+k <- ifelse(length(manyNAs(default_data, 0.3))==0,0,manyNAs(default_data, 0.3))      # find rows with share of missing values > 30%
+if(length(k)>0 & k[1]>0){
+  default_data <- default_data[-k,]                                                   # Removing rows with share of missing values > 30%   
+}
+                          
+
+pPmI <- preProcess(default_data[, 2:ncol(default_data)], method = 'medianImpute')      # Create the method of means 
+default_data[, 2:ncol(default_data)] <- predict(pPmI, default_data[, 2:ncol(default_data)]) # Filling in the missing  default data
+
+default_random_sample <- sample(1:nrow(default_data),default_random_test_number)       # create random rows number to create test and train data
+test_default_data <-default_data[default_random_sample,]                               # create default test data
+train_default_data <- default_data[-default_random_sample,]                            # create default train data
+
+
+nondefault_random_test_number <- 42                                                    # set the number of observations for default test data
+
+nondefault_data <- filter(data,default==0)                                             # filter non default data 
+k <- ifelse(length(manyNAs(nondefault_data, 0.3))==0,0,manyNAs(nondefault_data, 0.3))      # find rows with share of missing values > 30%
+if(length(k)>0 & k[1]>0){
+  nondefault_data <- nondefault_data[-k,]                                              # Removing rows with share of missing values > 30%
+}
+                                                      
+
+pPmI <- preProcess(nondefault_data[, 2:ncol(nondefault_data)], method = 'medianImpute')      # Create the method of means 
+nondefault_data[, 2:ncol(nondefault_data)] <- predict(pPmI, nondefault_data[, 2:ncol(nondefault_data)]) # Filling in the missing  non default data
+
+nondefault_random_sample <- sample(1:nrow(nondefault_data),nondefault_random_test_number)    # create random rows number to create test and train data
+test_nondefault_data <-nondefault_data[nondefault_random_sample,]                      # create no default data
+train_nondefault_data <- nondefault_data[-nondefault_random_sample,]                   # create no default train data
+
+train_data <- rbind(train_default_data,train_nondefault_data)                           # create final train data
+test_data <- rbind(test_default_data,test_nondefault_data)                             # create final test data
+
+
+ # Transform default column to factor
+#train_data$default<-as.factor(ifelse(train_data$default==1,"c1","c2"))                 
+#test_data$default<-as.factor(ifelse(test_data$default==1,"c1","c2"))
+
+
+rm(default_data,nondefault_data,test_nondefault_data,test_default_data,train_nondefault_data,train_default_data,pPmI,k,nondefault_random_sample,default_random_sample,nondefault_random_test_number,default_random_test_number)  # delete unnecessary information
+```
+
+  
+                                                     Calculation of Logit model
+```{r}
+train <- train_data                    # create copy of train data for creating models
+test <- test_data                      # create copyof test data for creating models
+# Logit regression
+
+# fitting logit model where х2 - Quick liquidity ratio; х11 - Financial stability; х12 - Interest coverage ratio 
+model.logit <- glm(default ~x2+x11+x12,family=binomial(link='logit'),data=train)   
+
+train<-cbind(train,predict(model.logit,train,se=TRUE))                   # Add predictions  
+train<- train%>%mutate(prob=plogis(fit))                                #create the column with probabilities of default for each observation
+
+m01.roc <- roc(train$default,train$prob)                                  # save ROC-curve for logit model
+
+test<-cbind(test,predict(model.logit,test,se=TRUE))                   # Add predictions for test data 
+test<- test%>%mutate(prob=plogis(fit))                                #create the column with probabilities for test data of default for each observation
+
+m01.test_roc <- roc(test$default,test$prob)                           # save ROC-curve for test data
+
+
+plot(m01.roc, grid.col = c("grey", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE,main='ROC curve for logit model',xlim=c(0.5,0))           # plot ROC-curve for test data
+
+train <- train%>%mutate(probability=ifelse(prob>=0.401,1,0))                      # creation of column of prediction for train data: default or not
+test <- test%>%mutate(probability=ifelse(prob>=0.401,1,0))                        # creation of column of prediction for test data: default or not
+
+table(Fact_on_train_data = train$default, Prediction_on_train_data = train$probability)   
+Acc <- mean(train$probability == train$default)
+paste("Accuracy on train data = ", round(100*Acc, 2), "%", sep = "") 
+
+table(Fact_on_train_data = test$default, Prediction_on_train_data = test$probability)   
+Acc <- mean(test$probability == test$default)
+paste("Accuracy on test data = ", round(100*Acc, 2), "%", sep = "") 
+
+
+```
+
+
+                                                   Calculation of Probit model                                                           
+```{r}
+train <- train_data                    # create copy of train data for creating models
+test <- test_data                      # create copyof test data for creating models
+# Logit regression
+
+# fitting logit model where х2 - Quick liquidity ratio; х11 - Financial stability; х12 - Interest coverage ratio 
+model.logit <- glm(default ~x2+x11+x12,family=binomial(link='probit'),data=train)   
+
+train<-cbind(train,predict(model.logit,train,se=TRUE))                   # Add predictions  
+train<- train%>%mutate(prob=plogis(fit))                                #create the column with probabilities of default for each observation
+
+m02.roc <- roc(train$default,train$prob)                                  # create ROC-curve for logit model
+
+test<-cbind(test,predict(model.logit,test,se=TRUE))                   # Add predictions for test data 
+test<- test%>%mutate(prob=plogis(fit))                                #create the column with probabilities for test data of default for each observation
+
+m02.test_roc <- roc(test$default,test$prob)                           # create ROC-curve for test data
+
+
+plot(m02.roc, grid.col = c("grey", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE,main='ROC curve for logit model',xlim=c(0.5,0))                            # plot ROC-curve for test data
+
+
+train <- train%>%mutate(probability=ifelse(prob>=0.441,1,0))                      # creation of column of prediction for train data: default or not
+test <- test%>%mutate(probability=ifelse(prob>=0.441,1,0))                        # creation of column of prediction for test data: default or not
+
+table(Fact_on_train_data = train$default, Prediction_on_train_data = train$probability)   
+Acc <- mean(train$probability == train$default)
+paste("Accuracy on train data = ", round(100*Acc, 2), "%", sep = "") 
+
+table(Fact_on_train_data = test$default, Prediction_on_train_data = test$probability)   
+Acc <- mean(test$probability == test$default)
+paste("Accuracy on test data = ", round(100*Acc, 2), "%", sep = "") 
+```
+
+
+                                                   Calculation of logit model with PCA method   
+```{r}
+train <- train_data                    # create copy of train data for creating models
+test <- test_data                      # create copyof test data for creating models
+
+prePCA <- preProcess(train,
+                     method = c("center", "scale", "pca"), pcaComp = 3)    # transformation of train data by PCA method
+md.pca <- predict(prePCA, train)
+train <- cbind(train$default,md.pca)                                       # create data with columns: default, PC1, PC2, PC3
+colnames(train) <- c('default','PC1','PC2','PC3')
+
+model.pca.logit <- glm(default~PC1+PC2+PC3,family=binomial(link='logit'),data=train)    # estimation of logit model 
+train<-cbind(train,predict(model.pca.logit,train,se=TRUE))                             # Add predictions  
+train<- train%>%mutate(prob=plogis(fit))                                        #create the column with probabilities of default for each observation
+
+m03.roc <- roc(train$default,train$prob)                                        # create ROC-curve for logit model
+
+test <- cbind(test$default,predict(prePCA,test))                                # transformation of test data by PCA method
+colnames(test) <- c('default','PC1','PC2','PC3')
+test<-cbind(test,predict(model.pca.logit,test,se=TRUE))                   # Add predictions for test data 
+test<- test%>%mutate(prob=plogis(fit))                                   #create the column with probabilities for test data of default for each observation
+
+m03.test_roc <- roc(test$default,test$prob)                           # create ROC-curve for test data
+
+plot(m03.roc, grid.col = c("grey", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE,main='ROC curve for logit model',xlim=c(0.5,0))                            # plot ROC-curve for test data
+
+
+train <- train%>%mutate(probability=ifelse(prob>=0.56,1,0))                      # creation of column of prediction for train data: default or not
+test <- test%>%mutate(probability=ifelse(prob>=0.56,1,0))                        # creation of column of prediction for test data: default or not
+
+table(Fact_on_train_data = train$default, Prediction_on_train_data = train$probability)   
+Acc <- mean(train$probability == train$default)
+paste("Accuracy on train data = ", round(100*Acc, 2), "%", sep = "") 
+
+table(Fact_on_train_data = test$default, Prediction_on_train_data = test$probability)   
+Acc <- mean(test$probability == test$default)
+paste("Accuracy on test data = ", round(100*Acc, 2), "%", sep = "") 
+```
+
+
+
+                                                   SVM with linear kernel
+```{r}
+trains <- train_data                    # create copy of train data for creating models
+test <- test_data                      # create copyof test data for creating models
+
+# transformation default column from character to factor, this is necessary for the calculation to be possible
+trains$default<-as.factor(ifelse(trains$default==1,"c1","c2"))                      
+test$default<-as.factor(ifelse(test$default==1,"c1","c2"))
+
+control <- trainControl(method = "repeatedcv", 
+                        number = 10, repeats = 3, classProbs = TRUE)      # algorithm of cross-sampling 
+svm.linear <- train(trains[,2:ncol(trains)], trains$default,
+                 method = "svmLinear", trControl = control)               # estimation SVM model
+pred.linear.roc <- predict(svm.linear, trains[,2:ncol(trains)], type = "prob")    # create predictions for train data
+m04.roc <- roc(trains$default, pred.linear.roc[, 1])                      # creating ROC-curve for train data
+trains <- cbind(trains,pred.linear.roc[,1])
+colnames(trains)[ncol(trains)] <- 'prediction'
+
+pred.linear.roc_test <- predict(svm.linear, test[,2:ncol(test)], type = "prob")   # create predictions for test data
+test <- cbind(test,pred.linear.roc_test[,1])
+colnames(test)[ncol(test)] <- 'prediction'
+
+
+plot(m04.roc, grid.col = c("grey", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE,main='ROC curve for SVM model with Linear kernel',xlim=c(0.5,0))      # plot ROC-curve for test data
+
+trains$probability <- ifelse(trains$prediction>=0.538,"c1","c2")            # create default factor for train data using info from ROC-curve            
+test$probability <- ifelse(test$prediction>=0.538,"c1","c2")            # create default factor for test data using info from ROC-curve           
+
+
+# Creating Accuracy data for model
+table(Fact_on_train_data = trains$default, Prediction_on_train_data = trains$probability)   
+Acc <- mean(trains$probability == trains$default)
+paste("Accuracy on train data = ", round(100*Acc, 2), "%", sep = "") 
+
+table(Fact_on_train_data = test$default, Prediction_on_train_data = test$probability)   
+Acc <- mean(test$probability == test$default)
+paste("Accuracy on test data = ", round(100*Acc, 2), "%", sep = "") 
+```
+
+
+                                                   SVM with polynomial kernel
+```{r}
+trains <- train_data                    # create copy of train data for creating models
+test <- test_data                      # create copyof test data for creating models
+
+# transformation default column from character to factor, this is necessary for the calculation to be possible
+trains$default<-as.factor(ifelse(trains$default==1,"c1","c2"))                      
+test$default<-as.factor(ifelse(test$default==1,"c1","c2"))
+
+control <- trainControl(method = "repeatedcv", 
+                        number = 10, repeats = 3, classProbs = TRUE)      # algorithm of cross-sampling 
+svm.linear <- train(trains[,2:ncol(trains)], trains$default,
+                 method = "svmPoly", trControl = control)               # estimation SVM model
+pred.linear.roc <- predict(svm.linear, trains[,2:ncol(trains)], type = "prob")    # create predictions for train data
+m05.roc <- roc(trains$default, pred.linear.roc[, 1])                      # creating ROC-curve for train data
+trains <- cbind(trains,pred.linear.roc[,1])
+colnames(trains)[ncol(trains)] <- 'prediction'
+
+pred.linear.roc_test <- predict(svm.linear, test[,2:ncol(test)], type = "prob")   # create predictions for test data
+test <- cbind(test,pred.linear.roc_test[,1])
+colnames(test)[ncol(test)] <- 'prediction'
+
+
+plot(m05.roc, grid.col = c("grey", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE,main='ROC curve for SVM model with Linear kernel',xlim=c(0.5,0))      # plot ROC-curve for test data
+
+trains$probability <- ifelse(trains$prediction>=0.535,"c1","c2")            # create default factor for train data using info from ROC-curve          
+test$probability <- ifelse(test$prediction>=0.535,"c1","c2")            # create default factor for test data using info from ROC-curve           
+
+
+# Creating Accuracy data for model
+table(Fact_on_train_data = trains$default, Prediction_on_train_data = trains$probability)   
+Acc <- mean(trains$probability == trains$default)
+paste("Accuracy on train data = ", round(100*Acc, 2), "%", sep = "") 
+
+table(Fact_on_train_data = test$default, Prediction_on_train_data = test$probability)   
+Acc <- mean(test$probability == test$default)
+paste("Accuracy on test data = ", round(100*Acc, 2), "%", sep = "") 
+```
+
+
+                                                   SVM with radial kernel
+```{r}
+# function that calculates accuracy for various parameters of SVM with radial kernel
+control <- trainControl(method = "repeatedcv", 
+                        number = 10, repeats = 3, classProbs = TRUE)      # algorithm of cross-sampling 
+radial_svm<-function(data){
+  gamma_par<-as.numeric(2^(-10:10))        # range for gamma
+  cost_par<-as.numeric(2^(1:8))            # range for cost
+  
+  result<-matrix(nrow=length(gamma_par)*length(cost_par),ncol=3)    # data.frame with results
+  k=1
+  for (i in gamma_par){
+    for (j in cost_par){
+      
+      svm.rbf <- train(trains[, 2:ncol(trains)], trains$default,
+                 method = "svmRadial", trControl = control,
+                 tuneGrid = expand.grid(sigma = i, C = j))   # calculating SVM 
+      Accuracy <- mean(predict(svm.rbf) == data$default)        # calculating accuracy for training data
+      result[k,1]=i
+      result[k,2]=j
+      result[k,3]=as.numeric(Accuracy)
+      k=k+1
+    }
+  }
+  result <- as.data.frame(result)
+  colnames(result) <- c('Gamma','Cost','Accuracy')
+  return(result)
+}
+
+trains <- train_data                    # create copy of train data for creating models
+test <- test_data                      # create copyof test data for creating models
+
+# transformation default column from character to factor, this is necessary for the calculation to be possible
+k1 <- trains$default                                          # save initial default column of train data
+k2 <- test$default                                            # save initial default column of test data
+trains$default<-as.factor(ifelse(trains$default==1,"c1","c2"))                      
+test$default<-as.factor(ifelse(test$default==1,"c1","c2"))
+
+
+data_train_radial <- radial_svm(trains)   # calculating SVM with radial kernel with different parametrs 
+data_train_radial <- data_train_radial[order(data_train_radial$Accuracy,decreasing = TRUE),]  # order results by Accuracy on train data
+data_train_radial <- data_train_radial[1,]  # the best parameters are those that show the greatest Accuracy
+
+radial_final_model <- train(trains[, 2:ncol(trains)], trains$default,
+                 method = "svmRadial", trControl = control,
+                 tuneGrid = expand.grid(sigma = data_train_radial$Gamma[1], C = data_train_radial$Cost[1]))  # estimate model with best parametrs
+
+pred.radial.roc <- predict(radial_final_model, trains[,2:ncol(trains)], type = "prob")    # create predictions for train data
+m06.roc <- roc(k1, pred.radial.roc[,1])                      # creating ROC-curve for train data
+trains <- cbind(trains,pred.radial.roc[,1])
+colnames(trains)[ncol(trains)] <- 'prediction'
+
+
+pred.radial.roc_test <- predict(radial_final_model, test[,2:ncol(test)], type = "prob")   # create predictions for test data
+test <- cbind(test,pred.radial.roc_test[,1])
+colnames(test)[ncol(test)] <- 'prediction'
+
+plot(m06.roc, grid.col = c("grey", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE,main='ROC curve for SVM model with Radial kernel',xlim=c(0.5,0))      # plot ROC-curve for test data
+
+trains$probability <- ifelse(trains$prediction>=0.5,1,0)            # create default factor for train data using info from ROC-curve          
+test$probability <- ifelse(test$prediction>=0.5,1,0)            # create default factor for test data using info from ROC-curve           
+
+# Creating Accuracy data for model
+table(Fact_on_train_data = k1, Prediction_on_train_data = trains$probability)   
+Acc <- mean(trains$probability == k1)
+paste("Accuracy on train data = ", round(100*Acc, 2), "%", sep = "") 
+
+table(Fact_on_train_data = k2, Prediction_on_train_data = test$probability)
+Acc <- mean(test$probability == k2)
+paste("Accuracy on test data = ", round(100*Acc, 2), "%", sep = "") 
+
+```
+
+
+
+                                                                 SVM with sigmoid kernel
+```{r}
+# function that calculates accuracy for various parameters of SVM with radial kernel
+control <- trainControl(method = "repeatedcv", 
+                        number = 10, repeats = 3, classProbs = TRUE)      # algorithm of cross-sampling 
+sigm_svm<-function(data){
+  sigma<-2^(-7:7)          # range for sigma
+  coef <- as.numeric(2^(-5:5)) 
+  result<-matrix(nrow=length(sigma)*length(coef),ncol=3)   # data.frame with results
+  k=1
+    for (i in 1:length(sigma)){
+      for(j in 1:length(coef)){
+        svm.rbf <-  train(trains[, 2:ncol(trains)], trains$default,
+                 method = "svmRadialSigma", trControl = control,
+                 tuneGrid = expand.grid(sigma = sigma[i],C=coef[j]))     # calculating SVM     
+        Accuracy <- mean(predict(svm.rbf) == data$default) # calculating accuracy for training data
+        result[k,1]=sigma[i]
+        result[k,2]=coef[j]
+        result[k,3]=Accuracy
+        k=k+1
+      }
+    }
+  result <- as.data.frame(result)
+  colnames(result) <- c('Sigma','Coef','Accuracy')
+  return(result)
+}
+
+
+trains <- train_data                    # create copy of train data for creating models
+test <- test_data                      # create copyof test data for creating models
+
+# transformation default column from character to factor, this is necessary for the calculation to be possible
+k1 <- trains$default                                          # save initial default column of train data
+k2 <- test$default                                            # save initial default column of test data
+trains$default<-as.factor(ifelse(trains$default==1,"c1","c2"))                      
+test$default<-as.factor(ifelse(test$default==1,"c1","c2"))
+
+
+data_train_sigm <- sigm_svm(trains)   # calculating SVM with radial kernel with different parametrs 
+data_train_sigm <- data_train_sigm[order(data_train_sigm$Accuracy,decreasing = TRUE),]  # order results by Accuracy on train data
+data_train_sigm <- data_train_sigm[1,]  # the best parameters are those that show the greatest Accuracy
+
+sigm_final_model <- train(trains[, 2:ncol(trains)], trains$default,
+                 method = "svmRadialSigma", trControl = control,
+                 tuneGrid = expand.grid(sigma = data_train_sigm$Sigma[1],C=data_train_sigm$Coef[1]))    # estimate model with best parametrs
+
+pred.sigm.roc <- predict(sigm_final_model, trains[,2:ncol(trains)], type = "prob")    # create predictions for train data
+m07.roc <- roc(k1, pred.sigm.roc[,1])                      # creating ROC-curve for train data
+trains <- cbind(trains,pred.sigm.roc[,1])
+colnames(trains)[ncol(trains)] <- 'prediction'
+
+
+pred.sigm.roc_test <- predict(sigm_final_model, test[,2:ncol(test)], type = "prob")   # create predictions for test data
+test <- cbind(test,pred.sigm.roc_test[,1])
+colnames(test)[ncol(test)] <- 'prediction'
+
+plot(m07.roc, grid.col = c("grey", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE,main='ROC curve for SVM model with Sigmoid kernel',xlim=c(0.5,0))      # plot ROC-curve for test data
+
+trains$probability <- ifelse(trains$prediction>=0.5,1,0)            # create default factor for train data using info from ROC-curve          
+test$probability <- ifelse(test$prediction>=0.5,1,0)            # create default factor for test data using info from ROC-curve           
+
+# Creating Accuracy data for model
+table(Fact_on_train_data = k1, Prediction_on_train_data = trains$probability)   
+Acc <- mean(trains$probability == k1)
+paste("Accuracy on train data = ", round(100*Acc, 2), "%", sep = "") 
+
+table(Fact_on_train_data = k2, Prediction_on_train_data = test$probability)
+Acc <- mean(test$probability == k2)
+paste("Accuracy on test data = ", round(100*Acc, 2), "%", sep = "") 
+
+```
+
+
+                                                                   Plotting ROC-curves
+```{r}
+plot(m01.roc, grid.col = c("green", "red"), grid = c(0.1, 0.2),
+     print.auc = TRUE, print.thres = TRUE)
+plot(m02.roc , add = TRUE, col = "green", print.auc = TRUE,
+     print.auc.y = 0.45, print.thres = TRUE)
+plot(m03.roc , add = TRUE, col = "blue", print.auc = TRUE,
+     print.auc.y = 0.40,print.thres = TRUE)
+plot(m04.roc , add = TRUE, col = "red", print.auc = TRUE,
+     print.auc.y = 0.35,print.thres = TRUE)
+plot(m05.roc , add = TRUE, col = "grey", print.auc = TRUE,
+     print.auc.y = 0.30,print.thres = TRUE)
+plot(m06.roc , add = TRUE, col = "darkblue", print.auc = TRUE,
+     print.auc.y = 0.25,print.thres = TRUE)
+plot(m07.roc , add = TRUE, col = "yellowgreen", print.auc = TRUE,
+     print.auc.y = 0.20,print.thres = TRUE)
+legend("bottomright", c("Logit","Probit","Logit.PCA","Linear","Poly","Radial","Sigm"), lwd = 2,
+       col = c("black", "green", "blue", "red","grey","darkblue","yellowgreen"))
+
+```
